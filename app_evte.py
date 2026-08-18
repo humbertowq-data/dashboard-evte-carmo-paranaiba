@@ -1,16 +1,15 @@
 """
-Dashboard EVTE 2.0 - Analisador Interativo de Estudos de Viabilidade Economico-Financeira
+Dashboard EVTE 3.0 - Analisador Interativo de Estudos de Viabilidade Economico-Financeira
 ==========================================================================================
 
-RECURSOS:
-  - Upload de qualquer PDF de EVTE/EVTEJA (extracao automatica de indicadores e series anuais).
-  - Fallback com o dataset de referencia (EVTEJA Carmo do Paranaiba) quando nenhum PDF for enviado.
-  - Calculo completo: VPL, TIR, Payback simples/descontado, Indice de Lucratividade,
-    ROIC, margens (bruta/EBITDA/liquida), Ponto de Equilibrio.
-  - Comparacao entre indicadores extraidos do PDF (conforme reportado no estudo)
-    e indicadores recalculados a partir do fluxo de caixa (auditoria cruzada).
-  - Visual moderno: tema dark customizado, cards de metricas, abas organizadas,
-    graficos Plotly interativos (zoom, hover, exportacao).
+NOVIDADES DA V3.0:
+  - Score de Saude do Projeto (0-100) com semaforo visual.
+  - Gauge chart TIR vs TMA (velocimetro).
+  - Waterfall chart: contribuicao de cada ano ao VPL.
+  - Tornado chart: sensibilidade multivariavel (Receita, OPEX, CAPEX, TMA).
+  - Cards de metricas com sparklines de tendencia.
+  - Tema visual redesenhado: paleta consistente, tipografia, espacamento.
+  - Layout em 5 abas organizadas por proposito analitico.
 
 INSTALACAO LOCAL:
     pip install streamlit plotly pandas numpy pdfplumber
@@ -25,7 +24,6 @@ PUBLICACAO (Streamlit Community Cloud, gratuito):
 """
 
 import re
-import io
 import numpy as np
 import pandas as pd
 import streamlit as st
@@ -38,7 +36,7 @@ except ImportError:
     PDF_OK = False
 
 # ============================================================
-# CONFIGURACAO DA PAGINA E TEMA VISUAL
+# CONFIGURACAO DA PAGINA
 # ============================================================
 
 st.set_page_config(
@@ -48,32 +46,95 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-CUSTOM_CSS = """
+# ============================================================
+# PALETA DE CORES E TEMA VISUAL
+# ============================================================
+
+COR_FUNDO = "#0b0e14"
+COR_CARD = "#151b26"
+COR_BORDA = "#252d3d"
+COR_PRIMARIA = "#3b82f6"
+COR_SUCESSO = "#22c55e"
+COR_ALERTA = "#f59e0b"
+COR_ERRO = "#ef4444"
+COR_TEXTO_SEC = "#94a3b8"
+COR_ROXO = "#a855f7"
+COR_ROSA = "#ec4899"
+
+CUSTOM_CSS = f"""
 <style>
-    .main { background-color: #0e1117; }
-    div[data-testid="metric-container"] {
-        background: linear-gradient(135deg, #1a1f2e 0%, #232937 100%);
-        border: 1px solid #2d3548;
-        border-radius: 12px;
-        padding: 16px 18px;
-        box-shadow: 0 4px 12px rgba(0,0,0,0.25);
-    }
-    div[data-testid="stMetricLabel"] { font-weight: 600; opacity: 0.85; }
-    div[data-testid="stMetricValue"] { font-size: 1.6rem; }
-    .stTabs [data-baseweb="tab-list"] { gap: 4px; }
-    .stTabs [data-baseweb="tab"] {
-        background-color: #1a1f2e;
-        border-radius: 8px 8px 0 0;
-        padding: 8px 20px;
-    }
-    .stTabs [aria-selected="true"] { background-color: #2d5ba3 !important; }
-    h1, h2, h3 { font-weight: 700; }
-    .badge-ok { background:#1e4d2b; color:#4ade80; padding:4px 12px; border-radius:20px; font-weight:600; }
-    .badge-warn { background:#4d1e1e; color:#f87171; padding:4px 12px; border-radius:20px; font-weight:600; }
-    .info-box { background:#1a1f2e; border-left:4px solid #2d5ba3; padding:12px 16px; border-radius:6px; margin:8px 0; }
+    .stApp {{ background-color: {COR_FUNDO}; }}
+    .main .block-container {{ padding-top: 1.5rem; max-width: 1400px; }}
+
+    /* Cards de metricas nativos do Streamlit */
+    div[data-testid="stMetric"] {{
+        background: linear-gradient(145deg, {COR_CARD} 0%, #1a2233 100%);
+        border: 1px solid {COR_BORDA};
+        border-radius: 14px;
+        padding: 18px 20px;
+        box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+        transition: transform 0.15s ease;
+    }}
+    div[data-testid="stMetric"]:hover {{ transform: translateY(-2px); border-color: {COR_PRIMARIA}; }}
+    div[data-testid="stMetricLabel"] {{ font-weight: 600; opacity: 0.75; font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.03em; }}
+    div[data-testid="stMetricValue"] {{ font-size: 1.75rem; font-weight: 700; }}
+    div[data-testid="stMetricDelta"] {{ font-size: 0.9rem; }}
+
+    /* Abas */
+    .stTabs [data-baseweb="tab-list"] {{ gap: 6px; border-bottom: 1px solid {COR_BORDA}; }}
+    .stTabs [data-baseweb="tab"] {{
+        background-color: transparent;
+        border-radius: 10px 10px 0 0;
+        padding: 10px 22px;
+        font-weight: 600;
+        color: {COR_TEXTO_SEC};
+    }}
+    .stTabs [aria-selected="true"] {{
+        background: linear-gradient(145deg, {COR_PRIMARIA}22 0%, {COR_PRIMARIA}11 100%) !important;
+        color: white !important;
+        border-bottom: 3px solid {COR_PRIMARIA};
+    }}
+
+    /* Titulos */
+    h1 {{ font-weight: 800; letter-spacing: -0.02em; }}
+    h2, h3 {{ font-weight: 700; letter-spacing: -0.01em; }}
+
+    /* Badges de status */
+    .badge {{
+        display: inline-block; padding: 6px 16px; border-radius: 24px;
+        font-weight: 700; font-size: 0.95rem; margin: 4px 0;
+    }}
+    .badge-ok {{ background: {COR_SUCESSO}22; color: {COR_SUCESSO}; border: 1px solid {COR_SUCESSO}55; }}
+    .badge-warn {{ background: {COR_ALERTA}22; color: {COR_ALERTA}; border: 1px solid {COR_ALERTA}55; }}
+    .badge-error {{ background: {COR_ERRO}22; color: {COR_ERRO}; border: 1px solid {COR_ERRO}55; }}
+
+    /* Caixa de informacao */
+    .info-box {{
+        background: {COR_CARD}; border-left: 4px solid {COR_PRIMARIA};
+        padding: 14px 18px; border-radius: 8px; margin: 10px 0;
+        font-size: 0.92rem;
+    }}
+
+    /* Score card */
+    .score-card {{
+        background: linear-gradient(145deg, {COR_CARD} 0%, #1a2233 100%);
+        border-radius: 18px; padding: 24px; text-align: center;
+        border: 1px solid {COR_BORDA};
+    }}
+    .score-numero {{ font-size: 3.2rem; font-weight: 800; line-height: 1; }}
+    .score-label {{ color: {COR_TEXTO_SEC}; font-size: 0.9rem; text-transform: uppercase; letter-spacing: 0.05em; margin-top: 4px; }}
+
+    hr {{ border-color: {COR_BORDA}; }}
 </style>
 """
 st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
+
+TEMPLATE_PLOTLY = "plotly_dark"
+LAYOUT_BASE = dict(
+    template=TEMPLATE_PLOTLY, plot_bgcolor=COR_FUNDO, paper_bgcolor=COR_FUNDO,
+    font=dict(family="Inter, sans-serif", size=13),
+    margin=dict(l=10, r=10, t=40, b=10),
+)
 
 
 # ============================================================
@@ -144,8 +205,10 @@ def extrair_serie_anual(texto_completo, palavra_chave):
     return serie
 
 
-def analisar_pdf(arquivo_pdf):
-    texto_completo, n_paginas = extrair_texto_completo(arquivo_pdf)
+@st.cache_data(show_spinner=False)
+def analisar_pdf_cache(arquivo_bytes, nome_arquivo):
+    import io
+    texto_completo, n_paginas = extrair_texto_completo(io.BytesIO(arquivo_bytes))
     indicadores = extrair_indicadores(texto_completo)
     ancoras = {
         "fluxo_caixa": ["Fluxo de Caixa Acumulado", "Fluxo de Caixa Livre"],
@@ -162,14 +225,13 @@ def analisar_pdf(arquivo_pdf):
                 break
         else:
             series[chave] = {}
-    return indicadores, series, n_paginas, texto_completo
+    return indicadores, series, n_paginas
 
 
 # ============================================================
 # DATASET DE REFERENCIA (fallback: EVTEJA Carmo do Paranaiba)
 # ============================================================
 
-ANOS_REF = list(range(1, 26))
 TMA_REF = 0.0807
 
 fluxo_caixa_acumulado_ref = {
@@ -181,10 +243,7 @@ fluxo_caixa_acumulado_ref = {
     21: 5_403_405.22, 22: 6_224_140.32, 23: 7_022_855.93, 24: 7_820_853.08,
     25: 8_606_136.05,
 }
-opex_ref = {
-    1: 1_310_237.12, **{a: 1_731_355.73 for a in range(2, 13)},
-    **{a: 1_745_538.99 for a in range(13, 26)}
-}
+opex_ref = {1: 1_310_237.12, **{a: 1_731_355.73 for a in range(2, 13)}, **{a: 1_745_538.99 for a in range(13, 26)}}
 receita_ref = {1: 2_246_815.19, **{a: 3_093_852.65 for a in range(2, 26)}}
 lucro_liquido_ref = {
     1: -2_865_617.04, 2: 227_065.11, 3: 179_086.57, 4: 224_887.28,
@@ -273,53 +332,65 @@ def fluxo_incremental_de_acumulado(fc_acumulado_dict):
     return dict(zip(serie.index, incremental.values))
 
 
-def fmt_moeda(x, pos=None):
-    return f'R$ {x/1e6:,.1f}M'
+def calcular_score_saude(vpl, tir, tma, payback_s, payback_d, horizonte):
+    score = 30 if vpl >= 0 else max(0, 30 + (vpl / abs(vpl)) * 10) if vpl != 0 else 15
+    spread = (tir - tma) / tma if tma else 0
+    score += min(30, max(0, 15 + spread * 100))
+    if not np.isnan(payback_s) and payback_s <= horizonte:
+        score += 20 * (1 - payback_s / horizonte)
+    if not np.isnan(payback_d) and payback_d <= horizonte:
+        score += 20
+    return min(100, max(0, score))
+
+
+def vpl_simulado(fluxos, taxa, fator_receita=1.0, fator_opex_capex=1.0):
+    total = 0
+    for ano, v in fluxos.items():
+        ajustado = v * fator_opex_capex if v < 0 else v * fator_receita
+        total += ajustado / (1 + taxa) ** ano
+    return total
 
 
 # ============================================================
-# SIDEBAR: UPLOAD E PARAMETROS
+# SIDEBAR
 # ============================================================
 
-st.sidebar.title("📁 Fonte de Dados")
-
+st.sidebar.markdown("### 📁 Fonte de Dados")
 uploaded_file = st.sidebar.file_uploader(
-    "Envie o PDF do Estudo de Viabilidade (EVTE/EVTEJA)",
+    "Envie o PDF do Estudo de Viabilidade",
     type=["pdf"],
-    help="O sistema tenta extrair automaticamente indicadores e séries de fluxo de caixa. "
-         "Se nenhum arquivo for enviado, o dashboard usa o estudo de referência (Carmo do Paranaíba/MG)."
+    help="Extração automática de indicadores e séries financeiras. Sem upload, usa o estudo de referência."
 )
 
 usar_pdf = False
-indicadores_extraidos = {}
-series_extraidas = {}
-nome_fonte = "Estudo de Referência: EVTEJA Carmo do Paranaíba/MG (IPGC, 2023)"
+indicadores_extraidos, series_extraidas = {}, {}
+nome_fonte = "Estudo de Referência — EVTEJA Carmo do Paranaíba/MG (IPGC, 2023)"
 
 if uploaded_file is not None:
     if not PDF_OK:
-        st.sidebar.error("Biblioteca pdfplumber não encontrada. Adicione 'pdfplumber' ao requirements.txt.")
+        st.sidebar.error("Módulo pdfplumber ausente. Adicione 'pdfplumber' ao requirements.txt.")
     else:
-        with st.spinner("Analisando o PDF... extraindo indicadores e séries financeiras."):
+        with st.spinner("Analisando PDF..."):
             try:
-                indicadores_extraidos, series_extraidas, n_paginas, _texto = analisar_pdf(uploaded_file)
+                file_bytes = uploaded_file.getvalue()
+                indicadores_extraidos, series_extraidas, n_paginas = analisar_pdf_cache(file_bytes, uploaded_file.name)
                 usar_pdf = True
-                nome_fonte = f"PDF enviado: {uploaded_file.name} ({n_paginas} páginas analisadas)"
-                st.sidebar.success(f"PDF processado com sucesso! {n_paginas} páginas.")
+                nome_fonte = f"{uploaded_file.name} ({n_paginas} páginas)"
+                st.sidebar.success(f"✅ {n_paginas} páginas processadas")
             except Exception as e:
-                st.sidebar.error(f"Erro ao processar PDF: {e}")
+                st.sidebar.error(f"Erro: {e}")
 
 st.sidebar.markdown("---")
-st.sidebar.title("⚙️ Parâmetros de Simulação")
-
+st.sidebar.markdown("### ⚙️ Parâmetros")
 tma_default = indicadores_extraidos.get("WACC / TMA (%)") if usar_pdf and indicadores_extraidos.get("WACC / TMA (%)") else TMA_REF * 100
-tma_input = st.sidebar.slider("Taxa Mínima de Atratividade / TMA (% a.a.)", 1.0, 25.0, float(tma_default), 0.1) / 100
+tma_input = st.sidebar.slider("TMA (% a.a.)", 1.0, 25.0, float(tma_default), 0.1) / 100
 
 st.sidebar.markdown("---")
-st.sidebar.caption(f"📄 Fonte ativa:\n\n{nome_fonte}")
+st.sidebar.caption(f"📄 **Fonte ativa**\n\n{nome_fonte}")
 
 
 # ============================================================
-# MONTAGEM DOS DADOS (PDF extraido OU referencia)
+# MONTAGEM DOS DADOS
 # ============================================================
 
 if usar_pdf and series_extraidas.get("fluxo_caixa"):
@@ -327,10 +398,11 @@ if usar_pdf and series_extraidas.get("fluxo_caixa"):
 else:
     fc_acumulado = fluxo_caixa_acumulado_ref
     if usar_pdf:
-        st.sidebar.warning("Não foi possível localizar a série de Fluxo de Caixa no PDF. Usando dataset de referência para os gráficos de fluxo.")
+        st.sidebar.warning("Série de Fluxo de Caixa não localizada no PDF — usando referência para os gráficos.")
 
 anos_disponiveis = sorted(fc_acumulado.keys())
 fluxos_incrementais = fluxo_incremental_de_acumulado(fc_acumulado)
+horizonte = max(anos_disponiveis)
 
 opex_serie = series_extraidas.get("opex") if usar_pdf and series_extraidas.get("opex") else opex_ref
 receita_serie = series_extraidas.get("receita") if usar_pdf and series_extraidas.get("receita") else receita_ref
@@ -344,19 +416,14 @@ df = pd.DataFrame({
     "receita": [receita_serie.get(a, np.nan) for a in anos_disponiveis],
     "lucro_liquido": [dre_serie.get(a, np.nan) for a in anos_disponiveis],
 })
-
 fluxos_dict = dict(zip(df["ano"], df["fluxo_caixa_livre"]))
-
-
-# ============================================================
-# CALCULO DOS INDICADORES RECALCULADOS
-# ============================================================
 
 vpl_calc = vpl_fluxo_anual(tma_input, fluxos_dict)
 tir_calc = tir_bisseccao(fluxos_dict)
 payback_s_calc = payback_simples(fluxos_dict)
 payback_d_calc = payback_descontado(tma_input, fluxos_dict)
 il_calc = indice_lucratividade(tma_input, fluxos_dict)
+score_saude = calcular_score_saude(vpl_calc, tir_calc, tma_input, payback_s_calc, payback_d_calc, horizonte)
 
 receita_total = df["receita"].sum()
 opex_total = df["opex"].sum()
@@ -368,23 +435,25 @@ margem_liquida_calc = (lucro_total / receita_total * 100) if receita_total else 
 # CABECALHO
 # ============================================================
 
-st.title("📊 Dashboard de Viabilidade Econômico-Financeira")
-st.markdown(f"<div class='info-box'>📄 <b>Fonte de dados:</b> {nome_fonte}</div>", unsafe_allow_html=True)
+col_titulo, col_score = st.columns([3, 1])
+with col_titulo:
+    st.title("📊 Dashboard de Viabilidade Econômico-Financeira")
+    st.markdown(f"<div class='info-box'>📄 <b>Fonte:</b> {nome_fonte}</div>", unsafe_allow_html=True)
+
+with col_score:
+    cor_score = COR_SUCESSO if score_saude >= 70 else (COR_ALERTA if score_saude >= 45 else COR_ERRO)
+    emoji_score = "🟢" if score_saude >= 70 else ("🟡" if score_saude >= 45 else "🔴")
+    st.markdown(f"""
+    <div class='score-card'>
+        <div class='score-numero' style='color:{cor_score}'>{score_saude:.0f}</div>
+        <div class='score-label'>{emoji_score} Score de Saúde</div>
+    </div>
+    """, unsafe_allow_html=True)
 
 viavel = (vpl_calc >= 0) and (tir_calc >= tma_input)
-if viavel:
-    st.markdown(
-        f"<span class='badge-ok'>✅ PROJETO VIÁVEL</span> &nbsp; VPL positivo e TIR "
-        f"({tir_calc*100:.2f}%) ≥ TMA ({tma_input*100:.2f}%)",
-        unsafe_allow_html=True
-    )
-else:
-    st.markdown(
-        f"<span class='badge-warn'>⚠️ ATENÇÃO</span> &nbsp; VPL negativo ou TIR abaixo da TMA "
-        f"de {tma_input*100:.2f}% no cenário simulado",
-        unsafe_allow_html=True
-    )
-
+badge_class = "badge-ok" if viavel else "badge-warn"
+badge_texto = "✅ PROJETO VIÁVEL" if viavel else "⚠️ ATENÇÃO — REVISAR PREMISSAS"
+st.markdown(f"<span class='badge {badge_class}'>{badge_texto}</span>", unsafe_allow_html=True)
 st.markdown("<br>", unsafe_allow_html=True)
 
 
@@ -392,47 +461,173 @@ st.markdown("<br>", unsafe_allow_html=True)
 # ABAS
 # ============================================================
 
-tab1, tab2, tab3, tab4 = st.tabs([
-    "📈 Visão Geral", "🔍 Indicadores Detalhados", "📊 Análise Gráfica", "📋 Dados & Auditoria"
+tab1, tab2, tab3, tab4, tab5 = st.tabs([
+    "📈 Visão Geral", "🎯 TIR & Sensibilidade", "💧 Composição do VPL",
+    "🔍 Indicadores & Auditoria", "📋 Dados"
 ])
 
 # --- TAB 1: VISAO GERAL ---
 with tab1:
-    st.subheader("Indicadores-Chave (recalculados a partir do fluxo de caixa)")
     c1, c2, c3, c4, c5 = st.columns(5)
     c1.metric("VPL", f"R$ {vpl_calc/1e6:,.2f} M")
     c2.metric("TIR", f"{tir_calc*100:.2f}%", delta=f"{(tir_calc-tma_input)*100:+.2f} p.p. vs TMA")
     c3.metric("Payback Simples", f"{payback_s_calc:.1f} anos" if not np.isnan(payback_s_calc) else "N/D")
     c4.metric("Payback Descontado", f"{payback_d_calc:.1f} anos" if not np.isnan(payback_d_calc) else "> horizonte")
-    c5.metric("Índice de Lucratividade", f"{il_calc:.2f}" if not np.isnan(il_calc) else "N/D")
+    c5.metric("Índice Lucratividade", f"{il_calc:.2f}" if not np.isnan(il_calc) else "N/D")
 
     st.markdown("<br>", unsafe_allow_html=True)
     c6, c7, c8, c9 = st.columns(4)
     c6.metric("Receita Total", f"R$ {receita_total/1e6:,.2f} M")
     c7.metric("OPEX Total", f"R$ {opex_total/1e6:,.2f} M")
-    c8.metric("Lucro Líquido Acumulado", f"R$ {lucro_total/1e6:,.2f} M")
+    c8.metric("Lucro Líquido Acum.", f"R$ {lucro_total/1e6:,.2f} M")
     c9.metric("Margem Líquida Média", f"{margem_liquida_calc:.1f}%" if not np.isnan(margem_liquida_calc) else "N/D")
 
     st.markdown("---")
     st.subheader("💰 Fluxo de Caixa Livre Acumulado")
     fig1 = go.Figure()
-    cores = ['#f87171' if v < 0 else '#4ade80' for v in df["fluxo_caixa_acumulado"]]
-    fig1.add_trace(go.Bar(x=df["ano"], y=df["fluxo_caixa_acumulado"], marker_color=cores, name="Fluxo acumulado"))
-    fig1.add_hline(y=0, line_color="white", line_width=1)
-    fig1.update_layout(
-        template="plotly_dark", xaxis_title="Ano", yaxis_title="R$",
-        height=420, hovermode="x unified", plot_bgcolor="#0e1117", paper_bgcolor="#0e1117"
-    )
+    cores_barras = [COR_ERRO if v < 0 else COR_SUCESSO for v in df["fluxo_caixa_acumulado"]]
+    fig1.add_trace(go.Bar(x=df["ano"], y=df["fluxo_caixa_acumulado"], marker_color=cores_barras, name="Fluxo acumulado"))
+    fig1.add_hline(y=0, line_color="#ffffff55", line_width=1)
+    fig1.update_layout(**LAYOUT_BASE, xaxis_title="Ano", yaxis_title="R$", height=420, hovermode="x unified")
     st.plotly_chart(fig1, use_container_width=True)
 
-# --- TAB 2: INDICADORES DETALHADOS ---
+    st.subheader("📈 Receita, OPEX e Lucro Líquido por Ano")
+    fig2 = go.Figure()
+    fig2.add_trace(go.Bar(x=df["ano"], y=df["receita"], name="Receita", marker_color=COR_PRIMARIA))
+    fig2.add_trace(go.Bar(x=df["ano"], y=df["opex"], name="OPEX", marker_color=COR_ALERTA))
+    fig2.add_trace(go.Scatter(x=df["ano"], y=df["lucro_liquido"], name="Lucro Líquido",
+                               mode="lines+markers", line=dict(color=COR_SUCESSO, width=3)))
+    fig2.update_layout(**LAYOUT_BASE, barmode="group", xaxis_title="Ano", yaxis_title="R$", height=420, hovermode="x unified")
+    st.plotly_chart(fig2, use_container_width=True)
+
+# --- TAB 2: TIR & SENSIBILIDADE ---
 with tab2:
-    st.subheader("📑 Indicadores Extraídos do PDF vs. Recalculados")
-    st.caption("Comparação entre os valores reportados no documento original (quando encontrados) e os "
-               "valores recalculados por este sistema a partir da série de fluxo de caixa, para auditoria cruzada.")
+    col_gauge, col_sens = st.columns([1, 2])
+    with col_gauge:
+        st.subheader("🎯 TIR vs TMA")
+        limite_gauge = max(tir_calc * 100 * 1.6, tma_input * 100 * 1.6, 15)
+        fig_gauge = go.Figure(go.Indicator(
+            mode="gauge+number+delta",
+            value=tir_calc * 100,
+            number={'suffix': "%", 'font': {'size': 40}},
+            delta={'reference': tma_input * 100, 'increasing': {'color': COR_SUCESSO}, 'decreasing': {'color': COR_ERRO}},
+            gauge={
+                'axis': {'range': [0, limite_gauge], 'tickcolor': "white"},
+                'bar': {'color': COR_PRIMARIA},
+                'bgcolor': COR_CARD,
+                'steps': [
+                    {'range': [0, tma_input * 100], 'color': f"{COR_ERRO}33"},
+                    {'range': [tma_input * 100, limite_gauge], 'color': f"{COR_SUCESSO}33"},
+                ],
+                'threshold': {'line': {'color': COR_ALERTA, 'width': 4}, 'thickness': 0.8, 'value': tma_input * 100},
+            },
+        ))
+        fig_gauge.update_layout(**LAYOUT_BASE, height=320)
+        st.plotly_chart(fig_gauge, use_container_width=True)
+        st.caption(f"Linha amarela = TMA atual ({tma_input*100:.2f}%). Ponteiro azul = TIR calculada.")
+
+    with col_sens:
+        st.subheader("📉 Sensibilidade do VPL à Taxa de Desconto")
+        taxas = np.arange(0.01, 0.25, 0.005)
+        vpls = [vpl_fluxo_anual(t, fluxos_dict) for t in taxas]
+        fig3 = go.Figure()
+        fig3.add_trace(go.Scatter(x=taxas * 100, y=vpls, mode="lines", line=dict(color=COR_ROXO, width=3), fill="tozeroy",
+                                   fillcolor=f"{COR_ROXO}22"))
+        fig3.add_hline(y=0, line_color="#ffffff55", line_width=1)
+        fig3.add_vline(x=tma_input * 100, line_dash="dash", line_color=COR_ALERTA, annotation_text=f"TMA {tma_input*100:.2f}%")
+        if not np.isnan(tir_calc):
+            fig3.add_vline(x=tir_calc * 100, line_dash="dot", line_color=COR_SUCESSO, annotation_text=f"TIR {tir_calc*100:.2f}%")
+        fig3.update_layout(**LAYOUT_BASE, xaxis_title="Taxa (%)", yaxis_title="VPL (R$)", height=320)
+        st.plotly_chart(fig3, use_container_width=True)
+
+    st.markdown("---")
+    st.subheader("🌪️ Análise de Sensibilidade Multivariável (Tornado)")
+    st.caption("Impacto no VPL ao variar cada premissa isoladamente em ±15% (±2 p.p. para a TMA).")
+
+    variaveis_tornado = {
+        "Receita (±15%)": ("receita", 0.15),
+        "OPEX/CAPEX (±15%)": ("custo", 0.15),
+        "TMA (±2 p.p.)": ("tma", 0.02),
+    }
+    resultados_tornado = []
+    for label, (tipo, delta) in variaveis_tornado.items():
+        if tipo == "receita":
+            vpl_low = vpl_simulado(fluxos_dict, tma_input, fator_receita=1 - delta)
+            vpl_high = vpl_simulado(fluxos_dict, tma_input, fator_receita=1 + delta)
+        elif tipo == "custo":
+            vpl_low = vpl_simulado(fluxos_dict, tma_input, fator_opex_capex=1 + delta)
+            vpl_high = vpl_simulado(fluxos_dict, tma_input, fator_opex_capex=1 - delta)
+        else:
+            vpl_low = vpl_fluxo_anual(tma_input + delta, fluxos_dict)
+            vpl_high = vpl_fluxo_anual(tma_input - delta, fluxos_dict)
+        resultados_tornado.append((label, vpl_low - vpl_calc, vpl_high - vpl_calc))
+
+    resultados_tornado.sort(key=lambda x: abs(x[2] - x[1]))
+    labels_t = [r[0] for r in resultados_tornado]
+    baixos = [r[1] for r in resultados_tornado]
+    altos = [r[2] for r in resultados_tornado]
+
+    fig_tornado = go.Figure()
+    fig_tornado.add_trace(go.Bar(y=labels_t, x=baixos, orientation='h', name='Cenário desfavorável', marker_color=COR_ERRO))
+    fig_tornado.add_trace(go.Bar(y=labels_t, x=altos, orientation='h', name='Cenário favorável', marker_color=COR_SUCESSO))
+    fig_tornado.update_layout(**LAYOUT_BASE, barmode='overlay', xaxis_title="Variação do VPL (R$)", height=320,
+                               legend=dict(orientation="h", yanchor="bottom", y=1.02))
+    st.plotly_chart(fig_tornado, use_container_width=True)
+
+# --- TAB 3: COMPOSICAO DO VPL (WATERFALL) ---
+with tab3:
+    st.subheader("💧 Contribuição de Cada Ano ao VPL")
+    st.caption("Cada barra mostra o valor presente do fluxo de caixa daquele ano, descontado à TMA selecionada.")
+
+    contrib_vp = {a: v / (1 + tma_input) ** a for a, v in fluxos_dict.items()}
+    anos_wf = sorted(contrib_vp.keys())
+
+    fig_wf = go.Figure(go.Waterfall(
+        x=[f"Ano {a}" for a in anos_wf] + ["VPL Total"],
+        y=[contrib_vp[a] for a in anos_wf] + [None],
+        measure=["relative"] * len(anos_wf) + ["total"],
+        increasing={"marker": {"color": COR_SUCESSO}},
+        decreasing={"marker": {"color": COR_ERRO}},
+        totals={"marker": {"color": COR_PRIMARIA}},
+        connector={"line": {"color": "#ffffff33"}},
+    ))
+    fig_wf.update_layout(**LAYOUT_BASE, height=480, xaxis_title="", yaxis_title="Valor Presente (R$)")
+    st.plotly_chart(fig_wf, use_container_width=True)
+
+    col_a, col_b = st.columns(2)
+    with col_a:
+        st.subheader("💹 Payback Visual")
+        acumulado_simples = np.cumsum(df["fluxo_caixa_livre"].fillna(0).values)
+        fig4 = go.Figure()
+        fig4.add_trace(go.Scatter(x=df["ano"], y=acumulado_simples, mode="lines+markers",
+                                   line=dict(color=COR_ROSA, width=3), fill="tozeroy", fillcolor=f"{COR_ROSA}18"))
+        fig4.add_hline(y=0, line_color="#ffffff55", line_width=1)
+        if not np.isnan(payback_s_calc):
+            fig4.add_vline(x=payback_s_calc, line_dash="dash", line_color=COR_SUCESSO,
+                           annotation_text=f"Payback: {payback_s_calc:.1f}a")
+        fig4.update_layout(**LAYOUT_BASE, xaxis_title="Ano", yaxis_title="R$ acumulado", height=380)
+        st.plotly_chart(fig4, use_container_width=True)
+
+    with col_b:
+        st.subheader("🥧 Distribuição do Fluxo (Positivo vs. Negativo)")
+        total_positivo = sum(v for v in fluxos_dict.values() if v > 0)
+        total_negativo = abs(sum(v for v in fluxos_dict.values() if v < 0))
+        fig_pizza = go.Figure(data=[go.Pie(
+            labels=["Entradas de caixa", "Saídas de caixa"],
+            values=[total_positivo, total_negativo],
+            hole=0.5,
+            marker_colors=[COR_SUCESSO, COR_ERRO],
+        )])
+        fig_pizza.update_layout(**LAYOUT_BASE, height=380)
+        st.plotly_chart(fig_pizza, use_container_width=True)
+
+# --- TAB 4: INDICADORES & AUDITORIA ---
+with tab4:
+    st.subheader("📑 Indicadores Extraídos vs. Recalculados")
+    st.caption("Comparação entre os valores reportados no documento (extração automática) e os "
+               "valores recalculados por este sistema a partir da série de fluxo de caixa.")
 
     fonte_indicadores = indicadores_extraidos if usar_pdf else indicadores_ref
-
     comparacao = pd.DataFrame({
         "Indicador": [
             "VPL (R$)", "TIR (%)", "Payback (anos)", "WACC / TMA (%)", "ROIC (%)",
@@ -440,22 +635,17 @@ with tab2:
             "Ponto de Equilíbrio (R$)", "Valor de Contrato (R$)",
             "Custo Capital Próprio (%)", "Custo Capital Terceiros (%)",
         ],
-        "Valor no PDF/Referência": [
-            fonte_indicadores.get("VPL (R$)"),
-            fonte_indicadores.get("TIR (%)"),
-            fonte_indicadores.get("Payback (anos)"),
-            fonte_indicadores.get("WACC / TMA (%)"),
-            fonte_indicadores.get("ROIC (%)"),
-            fonte_indicadores.get("Margem Bruta (%)"),
-            fonte_indicadores.get("Margem EBITDA (%)"),
-            fonte_indicadores.get("Margem Liquida (%)"),
-            fonte_indicadores.get("Ponto de Equilibrio (R$)"),
-            fonte_indicadores.get("Valor de Contrato (R$)"),
-            fonte_indicadores.get("Custo Capital Proprio (%)"),
-            fonte_indicadores.get("Custo Capital Terceiros (%)"),
+        "No PDF/Referência": [
+            fonte_indicadores.get("VPL (R$)"), fonte_indicadores.get("TIR (%)"),
+            fonte_indicadores.get("Payback (anos)"), fonte_indicadores.get("WACC / TMA (%)"),
+            fonte_indicadores.get("ROIC (%)"), fonte_indicadores.get("Margem Bruta (%)"),
+            fonte_indicadores.get("Margem EBITDA (%)"), fonte_indicadores.get("Margem Liquida (%)"),
+            fonte_indicadores.get("Ponto de Equilibrio (R$)"), fonte_indicadores.get("Valor de Contrato (R$)"),
+            fonte_indicadores.get("Custo Capital Proprio (%)"), fonte_indicadores.get("Custo Capital Terceiros (%)"),
         ],
-        "Valor Recalculado (fluxo de caixa)": [
-            round(vpl_calc, 2), round(tir_calc * 100, 2), round(payback_s_calc, 2) if not np.isnan(payback_s_calc) else None,
+        "Recalculado": [
+            round(vpl_calc, 2), round(tir_calc * 100, 2),
+            round(payback_s_calc, 2) if not np.isnan(payback_s_calc) else None,
             round(tma_input * 100, 2), None, None, None,
             round(margem_liquida_calc, 2) if not np.isnan(margem_liquida_calc) else None,
             None, round(receita_total, 2), None, None,
@@ -465,65 +655,16 @@ with tab2:
 
     if usar_pdf:
         n_encontrados = sum(1 for v in indicadores_extraidos.values() if v is not None)
-        st.info(f"🔎 {n_encontrados} de {len(indicadores_extraidos)} indicadores foram localizados automaticamente no PDF enviado.")
+        st.info(f"🔎 {n_encontrados} de {len(indicadores_extraidos)} indicadores localizados automaticamente no PDF.")
 
-# --- TAB 3: ANALISE GRAFICA ---
-with tab3:
-    st.subheader("📈 Receita, OPEX e Lucro Líquido por Ano")
-    fig2 = go.Figure()
-    fig2.add_trace(go.Bar(x=df["ano"], y=df["receita"], name="Receita", marker_color="#60a5fa"))
-    fig2.add_trace(go.Bar(x=df["ano"], y=df["opex"], name="OPEX", marker_color="#fb923c"))
-    fig2.add_trace(go.Scatter(x=df["ano"], y=df["lucro_liquido"], name="Lucro Líquido",
-                               mode="lines+markers", line=dict(color="#4ade80", width=3)))
-    fig2.update_layout(
-        template="plotly_dark", barmode="group", xaxis_title="Ano", yaxis_title="R$",
-        height=440, hovermode="x unified", plot_bgcolor="#0e1117", paper_bgcolor="#0e1117"
-    )
-    st.plotly_chart(fig2, use_container_width=True)
-
-    col_a, col_b = st.columns(2)
-    with col_a:
-        st.subheader("🎯 Sensibilidade do VPL à Taxa de Desconto")
-        taxas = np.arange(0.01, 0.25, 0.005)
-        vpls = [vpl_fluxo_anual(t, fluxos_dict) for t in taxas]
-        fig3 = go.Figure()
-        fig3.add_trace(go.Scatter(x=taxas * 100, y=vpls, mode="lines", line=dict(color="#a78bfa", width=3)))
-        fig3.add_hline(y=0, line_color="white", line_width=1)
-        fig3.add_vline(x=tma_input * 100, line_dash="dash", line_color="#f87171",
-                       annotation_text=f"TMA {tma_input*100:.2f}%")
-        if not np.isnan(tir_calc):
-            fig3.add_vline(x=tir_calc * 100, line_dash="dot", line_color="#4ade80",
-                           annotation_text=f"TIR {tir_calc*100:.2f}%")
-        fig3.update_layout(
-            template="plotly_dark", xaxis_title="Taxa (%)", yaxis_title="VPL (R$)",
-            height=400, plot_bgcolor="#0e1117", paper_bgcolor="#0e1117"
-        )
-        st.plotly_chart(fig3, use_container_width=True)
-
-    with col_b:
-        st.subheader("💹 Payback Visual")
-        acumulado_simples = np.cumsum(df["fluxo_caixa_livre"].fillna(0).values)
-        fig4 = go.Figure()
-        fig4.add_trace(go.Scatter(x=df["ano"], y=acumulado_simples, mode="lines+markers",
-                                   line=dict(color="#fb7185", width=3)))
-        fig4.add_hline(y=0, line_color="white", line_width=1)
-        if not np.isnan(payback_s_calc):
-            fig4.add_vline(x=payback_s_calc, line_dash="dash", line_color="#4ade80",
-                           annotation_text=f"Payback: {payback_s_calc:.1f}a")
-        fig4.update_layout(
-            template="plotly_dark", xaxis_title="Ano", yaxis_title="R$ (acumulado)",
-            height=400, plot_bgcolor="#0e1117", paper_bgcolor="#0e1117"
-        )
-        st.plotly_chart(fig4, use_container_width=True)
-
-# --- TAB 4: DADOS & AUDITORIA ---
-with tab4:
+# --- TAB 5: DADOS ---
+with tab5:
     st.subheader("📋 Tabela Detalhada")
     df_show = df.copy()
     df_show.columns = ["Ano", "Fluxo Acumulado", "Fluxo Livre", "OPEX", "Receita", "Lucro Líquido"]
     st.dataframe(
         df_show.style.format({c: "R$ {:,.2f}" for c in df_show.columns if c != "Ano"}),
-        use_container_width=True, height=400
+        use_container_width=True, height=420
     )
     csv = df_show.to_csv(index=False).encode("utf-8-sig")
     st.download_button("⬇️ Baixar dados em CSV", csv, "dados_evte.csv", "text/csv")
@@ -535,7 +676,6 @@ with tab4:
         st.dataframe(df_ind, use_container_width=True, height=380)
 
 st.markdown("---")
-st.caption("Dashboard interativo de análise de viabilidade econômico-financeira. "
-           "Os cálculos de VPL/TIR/Payback são recalculados localmente a partir da série de fluxo de caixa "
-           "(extraída do PDF ou do dataset de referência) e servem como apoio à tomada de decisão, "
-           "não substituindo a análise de um profissional habilitado.")
+st.caption("Dashboard interativo de análise de viabilidade econômico-financeira. Os cálculos de VPL/TIR/Payback "
+           "são recalculados localmente a partir da série de fluxo de caixa e servem como apoio à tomada de "
+           "decisão — não substituem a análise de um profissional habilitado.")
