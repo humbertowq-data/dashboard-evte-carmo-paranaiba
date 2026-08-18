@@ -1,6 +1,6 @@
 # Analisador de Viabilidade Econômico-Financeira (EVTEJA)
 
-Este é um analisador de dados moderno e limpo focado em controladoria e engenharia econômica, desenvolvido em Python. A ferramenta foi modelada a partir de premissas reais de infraestrutura urbana inteligente, integrando conceitos de gestão enxuta (Lean) para monitoramento de eficiência.
+Este é um analisador de dados focado em controladoria e engenharia econômica, desenvolvido em Python. A ferramenta foi modelada a partir de premissas reais de infraestrutura urbana inteligente, integrando conceitos de gestão enxuta (Lean) para monitoramento de eficiência.
 
 ## 🚀 Funcionalidades
 
