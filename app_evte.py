@@ -1,27 +1,26 @@
 """
-Dashboard EVTE 4.1 - Analisador Executivo de Estudos de Viabilidade Economico-Financeira
+Dashboard EVTE 5.0 - Analisador Executivo de Estudos de Viabilidade Economico-Financeira
 ==========================================================================================
-Correcao v4.1: cores com transparencia em elementos Plotly (linhas, preenchimentos, steps do
-gauge) convertidas de hex+alpha (#rrggbbaa) para rgba(r,g,b,a), formato aceito universalmente
-pelo validador de cores do Plotly. O CSS (que aceita #rrggbbaa nativamente) nao foi alterado.
+V5.0: Tema claro (fundo branco) + exportacao de relatorio executivo em PDF.
 
-NOVIDADES DA V4.0 (mantidas):
-  - Payback relativo ao prazo da concessao (% consumido + margem de seguranca).
-  - Retorno sobre Capital Proprio (equity) - separado do retorno do projeto (unlevered).
-  - DSCR aproximado (Indice de Cobertura do Servico da Divida).
-  - Matriz de Riscos qualitativa com heatmap de severidade.
-  - Comparativo Value for Money (vantajosidade para o poder concedente).
-  - Alerta de concentracao de receita (dependencia de pagador unico).
-  - Interface com hierarquia visual clara, secoes "Investidor" vs "Poder Publico".
+MANTIDO DA V4.1:
+  - Payback relativo ao prazo da concessao, ROE (equity), DSCR, Value for Money,
+    Matriz de Riscos, alerta de concentracao de receita, validacao cruzada de extracao.
+
+NOVIDADES V5.0:
+  - Tema claro: fundo branco, paleta com contraste validado (WCAG AA) para leitura confortavel.
+  - Botao "Exportar Relatorio em PDF": gera um PDF de 1-2 paginas com os indicadores-chave
+    e os principais graficos, para enviar a quem nao tem acesso ao link do dashboard.
 
 INSTALACAO LOCAL:
-    pip install streamlit plotly pandas numpy pdfplumber
+    pip install streamlit plotly pandas numpy pdfplumber kaleido reportlab
 
 EXECUCAO LOCAL:
     streamlit run app_evte.py
 """
 
 import re
+import io
 import numpy as np
 import pandas as pd
 import streamlit as st
@@ -33,36 +32,45 @@ try:
 except ImportError:
     PDF_OK = False
 
+try:
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.units import cm
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Image as RLImage, Table, TableStyle
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib import colors as rl_colors
+    REPORTLAB_OK = True
+except ImportError:
+    REPORTLAB_OK = False
+
 st.set_page_config(page_title="Dashboard EVTE | Análise Executiva", page_icon="📊", layout="wide", initial_sidebar_state="expanded")
 
 # ============================================================
-# PALETA E TEMA VISUAL
+# PALETA — TEMA CLARO (contraste validado WCAG AA)
 # ============================================================
 
-COR_FUNDO = "#0a0c10"
-COR_CARD = "#12151c"
-COR_BORDA = "#20242f"
-COR_PRIMARIA = "#4f8cff"
-COR_SUCESSO = "#2fd97f"
-COR_ALERTA = "#ffb020"
-COR_ERRO = "#ff5c5c"
-COR_TEXTO = "#e8eaed"
-COR_TEXTO_SEC = "#8b93a3"
-COR_ROXO = "#b985ff"
-COR_ROSA = "#ff7cb6"
-COR_CIANO = "#4fd8e8"
+COR_FUNDO = "#f7f8fa"
+COR_CARD = "#ffffff"
+COR_BORDA = "#e2e5eb"
+COR_PRIMARIA = "#2563eb"
+COR_SUCESSO = "#16a34a"
+COR_ALERTA = "#d97706"
+COR_ERRO = "#dc2626"
+COR_TEXTO = "#1e293b"
+COR_TEXTO_SEC = "#56637a"
+COR_ROXO = "#7c3aed"
+COR_ROSA = "#db2777"
+COR_CIANO = "#0891b2"
 
-# Versoes RGBA (para uso em elementos Plotly, que nao aceitam hex+alpha de 8 digitos)
 def hex_to_rgba(hex_color, alpha):
     hex_color = hex_color.lstrip('#')
     r, g, b = int(hex_color[0:2], 16), int(hex_color[2:4], 16), int(hex_color[4:6], 16)
     return f"rgba({r},{g},{b},{alpha})"
 
-RGBA_BRANCO_FRACO = "rgba(255,255,255,0.2)"
-RGBA_ROXO_FRACO = hex_to_rgba(COR_ROXO, 0.13)
+RGBA_LINHA_REF = "rgba(30,41,59,0.25)"
+RGBA_ROXO_FRACO = hex_to_rgba(COR_ROXO, 0.12)
 RGBA_ROSA_FRACO = hex_to_rgba(COR_ROSA, 0.10)
-RGBA_ERRO_FRACO = hex_to_rgba(COR_ERRO, 0.19)
-RGBA_SUCESSO_FRACO = hex_to_rgba(COR_SUCESSO, 0.19)
+RGBA_ERRO_FRACO = hex_to_rgba(COR_ERRO, 0.15)
+RGBA_SUCESSO_FRACO = hex_to_rgba(COR_SUCESSO, 0.15)
 
 CUSTOM_CSS = f"""
 <style>
@@ -76,11 +84,12 @@ CUSTOM_CSS = f"""
         border: 1px solid {COR_BORDA};
         border-radius: 12px;
         padding: 16px 18px 14px 18px;
-        transition: border-color 0.15s ease;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+        transition: box-shadow 0.15s ease, border-color 0.15s ease;
     }}
-    div[data-testid="stMetric"]:hover {{ border-color: {COR_PRIMARIA}55; }}
-    div[data-testid="stMetricLabel"] p {{ font-weight: 600; opacity: 0.65; font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.04em; }}
-    div[data-testid="stMetricValue"] {{ font-size: 1.55rem; font-weight: 700; }}
+    div[data-testid="stMetric"]:hover {{ border-color: {COR_PRIMARIA}80; box-shadow: 0 4px 10px rgba(0,0,0,0.06); }}
+    div[data-testid="stMetricLabel"] p {{ font-weight: 600; opacity: 0.7; font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.04em; color: {COR_TEXTO_SEC}; }}
+    div[data-testid="stMetricValue"] {{ font-size: 1.55rem; font-weight: 700; color: {COR_TEXTO}; }}
     div[data-testid="stMetricDelta"] {{ font-size: 0.85rem; }}
 
     .stTabs [data-baseweb="tab-list"] {{ gap: 4px; border-bottom: 1px solid {COR_BORDA}; margin-bottom: 8px; }}
@@ -89,23 +98,23 @@ CUSTOM_CSS = f"""
         padding: 10px 20px; font-weight: 600; font-size: 0.92rem; color: {COR_TEXTO_SEC};
     }}
     .stTabs [aria-selected="true"] {{
-        background: {COR_PRIMARIA}18 !important; color: {COR_TEXTO} !important;
+        background: {COR_PRIMARIA}12 !important; color: {COR_PRIMARIA} !important;
         border-bottom: 2px solid {COR_PRIMARIA};
     }}
 
-    h1 {{ font-weight: 800; letter-spacing: -0.02em; font-size: 1.9rem; margin-bottom: 0.2rem; }}
-    h2 {{ font-weight: 700; letter-spacing: -0.01em; font-size: 1.3rem; }}
+    h1 {{ font-weight: 800; letter-spacing: -0.02em; font-size: 1.9rem; margin-bottom: 0.2rem; color: {COR_TEXTO}; }}
+    h2 {{ font-weight: 700; letter-spacing: -0.01em; font-size: 1.3rem; color: {COR_TEXTO}; }}
     h3 {{ font-weight: 700; font-size: 1.05rem; color: {COR_TEXTO}; }}
-    p, .stCaption {{ color: {COR_TEXTO_SEC}; }}
+    p, .stCaption, [data-testid="stCaptionContainer"] {{ color: {COR_TEXTO_SEC} !important; }}
 
     .badge {{ display: inline-block; padding: 5px 14px; border-radius: 20px; font-weight: 700; font-size: 0.85rem; }}
-    .badge-ok {{ background: {COR_SUCESSO}1a; color: {COR_SUCESSO}; border: 1px solid {COR_SUCESSO}40; }}
-    .badge-warn {{ background: {COR_ALERTA}1a; color: {COR_ALERTA}; border: 1px solid {COR_ALERTA}40; }}
+    .badge-ok {{ background: {COR_SUCESSO}15; color: {COR_SUCESSO}; border: 1px solid {COR_SUCESSO}40; }}
+    .badge-warn {{ background: {COR_ALERTA}15; color: {COR_ALERTA}; border: 1px solid {COR_ALERTA}40; }}
 
-    .info-box {{ background: {COR_CARD}; border-left: 3px solid {COR_PRIMARIA}; padding: 12px 16px; border-radius: 6px; font-size: 0.88rem; }}
-    .alert-box {{ background: {COR_ALERTA}12; border-left: 3px solid {COR_ALERTA}; padding: 12px 16px; border-radius: 6px; font-size: 0.88rem; margin: 8px 0; }}
+    .info-box {{ background: {COR_PRIMARIA}08; border-left: 3px solid {COR_PRIMARIA}; padding: 12px 16px; border-radius: 6px; font-size: 0.88rem; color: {COR_TEXTO}; }}
+    .alert-box {{ background: {COR_ALERTA}0d; border-left: 3px solid {COR_ALERTA}; padding: 12px 16px; border-radius: 6px; font-size: 0.88rem; margin: 8px 0; color: {COR_TEXTO}; }}
 
-    .score-card {{ background: {COR_CARD}; border-radius: 16px; padding: 22px; text-align: center; border: 1px solid {COR_BORDA}; }}
+    .score-card {{ background: {COR_CARD}; border-radius: 16px; padding: 22px; text-align: center; border: 1px solid {COR_BORDA}; box-shadow: 0 1px 3px rgba(0,0,0,0.04); }}
     .score-numero {{ font-size: 2.8rem; font-weight: 800; line-height: 1; }}
     .score-label {{ color: {COR_TEXTO_SEC}; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.05em; margin-top: 6px; }}
 
@@ -114,17 +123,18 @@ CUSTOM_CSS = f"""
         padding-bottom: 8px; border-bottom: 1px solid {COR_BORDA};
     }}
     .pill {{ padding: 3px 10px; border-radius: 6px; font-size: 0.75rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em; }}
-    .pill-investidor {{ background: {COR_ROXO}1a; color: {COR_ROXO}; }}
-    .pill-publico {{ background: {COR_CIANO}1a; color: {COR_CIANO}; }}
+    .pill-investidor {{ background: {COR_ROXO}15; color: {COR_ROXO}; }}
+    .pill-publico {{ background: {COR_CIANO}15; color: {COR_CIANO}; }}
 
     hr {{ border-color: {COR_BORDA}; margin: 1.2rem 0; }}
     div[data-testid="stDataFrame"] {{ border: 1px solid {COR_BORDA}; border-radius: 8px; }}
+    section[data-testid="stSidebar"] {{ background-color: {COR_CARD}; border-right: 1px solid {COR_BORDA}; }}
 </style>
 """
 st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
 
 LAYOUT_BASE = dict(
-    template="plotly_dark", plot_bgcolor=COR_FUNDO, paper_bgcolor=COR_FUNDO,
+    template="plotly_white", plot_bgcolor=COR_CARD, paper_bgcolor=COR_CARD,
     font=dict(family="Inter, sans-serif", size=12, color=COR_TEXTO),
     margin=dict(l=10, r=10, t=35, b=10),
 )
@@ -204,7 +214,6 @@ def extrair_serie_anual(texto_completo, palavra_chave):
 
 @st.cache_data(show_spinner=False)
 def analisar_pdf_cache(arquivo_bytes, nome_arquivo):
-    import io
     texto_completo, n_paginas = extrair_texto_completo(io.BytesIO(arquivo_bytes))
     indicadores = extrair_indicadores(texto_completo)
     ancoras = {
@@ -410,6 +419,128 @@ def calcular_concentracao_receita(receita_serie):
 
 
 # ============================================================
+# GERACAO DE RELATORIO PDF EXECUTIVO
+# ============================================================
+
+def gerar_grafico_para_pdf(df, tma_input, fluxos_dict):
+    fig = go.Figure()
+    cores_barras = [COR_ERRO if v < 0 else COR_SUCESSO for v in df["fluxo_caixa_acumulado"]]
+    fig.add_trace(go.Bar(x=df["ano"], y=df["fluxo_caixa_acumulado"], marker_color=cores_barras))
+    fig.add_hline(y=0, line_color=RGBA_LINHA_REF, line_width=1)
+    fig.update_layout(
+        template="plotly_white", title="Fluxo de Caixa Livre Acumulado",
+        xaxis_title="Ano", yaxis_title="R$", height=380, width=760,
+        font=dict(family="Inter, sans-serif", size=11),
+    )
+    return fig.to_image(format="png", scale=2)
+
+
+def gerar_pdf_executivo(nome_fonte, score_saude, viavel, vpl_calc, tir_calc, tma_input,
+                         payback_s_calc, payback_d_calc, il_calc, receita_total, opex_total,
+                         lucro_total, margem_liquida_calc, tir_equity, vpl_equity,
+                         capital_proprio_valor, capital_terceiros_valor, dscr_calc,
+                         vantajosidade_vfm_pct, economia_vfm_valor, df, fluxos_dict):
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=A4, topMargin=1.5*cm, bottomMargin=1.5*cm,
+                             leftMargin=1.8*cm, rightMargin=1.8*cm)
+    styles = getSampleStyleSheet()
+    titulo_style = ParagraphStyle('Titulo', parent=styles['Title'], fontSize=18, spaceAfter=4,
+                                   textColor=rl_colors.HexColor(COR_TEXTO))
+    subtitulo_style = ParagraphStyle('Subtitulo', parent=styles['Normal'], fontSize=10,
+                                      textColor=rl_colors.HexColor(COR_TEXTO_SEC), spaceAfter=14)
+    secao_style = ParagraphStyle('Secao', parent=styles['Heading2'], fontSize=13, spaceBefore=14,
+                                  spaceAfter=8, textColor=rl_colors.HexColor(COR_PRIMARIA))
+    corpo_style = ParagraphStyle('Corpo', parent=styles['Normal'], fontSize=9.5, leading=14,
+                                  textColor=rl_colors.HexColor(COR_TEXTO))
+
+    elementos = []
+    elementos.append(Paragraph("Relatório Executivo — Viabilidade Econômico-Financeira", titulo_style))
+    elementos.append(Paragraph(f"Fonte dos dados: {nome_fonte}", subtitulo_style))
+
+    status_txt = "PROJETO VIÁVEL" if viavel else "ATENÇÃO — REVISAR PREMISSAS"
+    status_cor = rl_colors.HexColor(COR_SUCESSO) if viavel else rl_colors.HexColor(COR_ALERTA)
+    elementos.append(Paragraph(f"<b><font color='{status_cor.hexval()}'>{status_txt}</font></b> · "
+                                f"Score de Saúde do Projeto: <b>{score_saude:.0f}/100</b>", corpo_style))
+    elementos.append(Spacer(1, 10))
+
+    elementos.append(Paragraph("Indicadores-Chave do Projeto", secao_style))
+    dados_tabela1 = [
+        ["Indicador", "Valor"],
+        ["VPL (à TMA de {:.2f}%)".format(tma_input*100), f"R$ {vpl_calc/1e6:,.2f} M"],
+        ["TIR", f"{tir_calc*100:.2f}%"],
+        ["Payback Simples", f"{payback_s_calc:.1f} anos" if not np.isnan(payback_s_calc) else "N/D"],
+        ["Payback Descontado", f"{payback_d_calc:.1f} anos" if not np.isnan(payback_d_calc) else "> horizonte"],
+        ["Índice de Lucratividade", f"{il_calc:.2f}" if not np.isnan(il_calc) else "N/D"],
+        ["Receita Total", f"R$ {receita_total/1e6:,.2f} M"],
+        ["OPEX Total", f"R$ {opex_total/1e6:,.2f} M"],
+        ["Lucro Líquido Acumulado", f"R$ {lucro_total/1e6:,.2f} M"],
+        ["Margem Líquida Média", f"{margem_liquida_calc:.1f}%" if not np.isnan(margem_liquida_calc) else "N/D"],
+    ]
+    tabela1 = Table(dados_tabela1, colWidths=[9*cm, 6*cm])
+    tabela1.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), rl_colors.HexColor(COR_PRIMARIA)),
+        ('TEXTCOLOR', (0, 0), (-1, 0), rl_colors.white),
+        ('FONTSIZE', (0, 0), (-1, -1), 9),
+        ('GRID', (0, 0), (-1, -1), 0.5, rl_colors.HexColor(COR_BORDA)),
+        ('ROWBACKGROUNDS', (0, 1), (-1, -1), [rl_colors.white, rl_colors.HexColor(COR_FUNDO)]),
+        ('TOPPADDING', (0, 0), (-1, -1), 5), ('BOTTOMPADDING', (0, 0), (-1, -1), 5),
+    ]))
+    elementos.append(tabela1)
+    elementos.append(Spacer(1, 12))
+
+    elementos.append(Paragraph("Perspectiva do Investidor (Equity)", secao_style))
+    dados_tabela2 = [
+        ["Indicador", "Valor"],
+        ["Capital Próprio Investido", f"R$ {capital_proprio_valor/1e6:,.2f} M"],
+        ["Capital de Terceiros", f"R$ {capital_terceiros_valor/1e6:,.2f} M"],
+        ["TIR do Capital Próprio", f"{tir_equity*100:.2f}%" if not np.isnan(tir_equity) else "N/D"],
+        ["VPL do Capital Próprio", f"R$ {vpl_equity/1e6:,.2f} M" if not np.isnan(vpl_equity) else "N/D"],
+        ["DSCR (Cobertura da Dívida)", f"{dscr_calc:.2f}x" if dscr_calc else "N/D"],
+    ]
+    tabela2 = Table(dados_tabela2, colWidths=[9*cm, 6*cm])
+    tabela2.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), rl_colors.HexColor(COR_ROXO)),
+        ('TEXTCOLOR', (0, 0), (-1, 0), rl_colors.white),
+        ('FONTSIZE', (0, 0), (-1, -1), 9),
+        ('GRID', (0, 0), (-1, -1), 0.5, rl_colors.HexColor(COR_BORDA)),
+        ('ROWBACKGROUNDS', (0, 1), (-1, -1), [rl_colors.white, rl_colors.HexColor(COR_FUNDO)]),
+        ('TOPPADDING', (0, 0), (-1, -1), 5), ('BOTTOMPADDING', (0, 0), (-1, -1), 5),
+    ]))
+    elementos.append(tabela2)
+    elementos.append(Spacer(1, 12))
+
+    if vantajosidade_vfm_pct is not None:
+        elementos.append(Paragraph("Perspectiva do Poder Público (Value for Money)", secao_style))
+        elementos.append(Paragraph(
+            f"A modelagem via concessão (PPP) apresenta uma vantajosidade estimada de "
+            f"<b>{vantajosidade_vfm_pct:.2f}%</b> em relação ao custo atual do município, representando uma "
+            f"economia em valor presente de aproximadamente <b>R$ {economia_vfm_valor/1e6:,.2f} milhões</b> "
+            f"ao longo do período da concessão.", corpo_style
+        ))
+        elementos.append(Spacer(1, 10))
+
+    try:
+        img_bytes = gerar_grafico_para_pdf(df, tma_input, fluxos_dict)
+        img_buffer = io.BytesIO(img_bytes)
+        elementos.append(Paragraph("Fluxo de Caixa Livre Acumulado", secao_style))
+        elementos.append(RLImage(img_buffer, width=15*cm, height=7.6*cm))
+    except Exception:
+        pass
+
+    elementos.append(Spacer(1, 14))
+    elementos.append(Paragraph(
+        "Este relatório é gerado automaticamente a partir da série de fluxo de caixa extraída do documento "
+        "original ou do dataset de referência. Os indicadores de ROE/DSCR são aproximações simplificadas. "
+        "Este material serve como apoio à tomada de decisão e não substitui a análise de um profissional habilitado.",
+        ParagraphStyle('Rodape', parent=styles['Normal'], fontSize=7.5, textColor=rl_colors.HexColor(COR_TEXTO_SEC))
+    ))
+
+    doc.build(elementos)
+    buffer.seek(0)
+    return buffer
+
+
+# ============================================================
 # SIDEBAR
 # ============================================================
 
@@ -457,8 +588,6 @@ prazo_amortizacao = st.sidebar.slider("Prazo de Amortização da Dívida (anos)"
 
 st.sidebar.markdown("---")
 st.sidebar.caption(f"📄 **Fonte ativa**\n\n{nome_fonte}")
-st.sidebar.caption("💡 Os parâmetros de capital/dívida alimentam os indicadores de ROE e DSCR na aba "
-                    "'Investidor × Poder Público'.")
 
 
 # ============================================================
@@ -521,6 +650,30 @@ economia_vfm_valor = vfm_atual - vfm_ppp if vfm_atual and vfm_ppp else None
 
 cv_receita = calcular_concentracao_receita(receita_serie)
 
+viavel = (vpl_calc >= 0) and (tir_calc >= tma_input)
+
+st.sidebar.markdown("---")
+st.sidebar.markdown("## 📄 Exportar")
+if REPORTLAB_OK:
+    if st.sidebar.button("📥 Gerar Relatório PDF Executivo", use_container_width=True):
+        with st.spinner("Gerando PDF..."):
+            try:
+                pdf_buffer = gerar_pdf_executivo(
+                    nome_fonte, score_saude, viavel, vpl_calc, tir_calc, tma_input,
+                    payback_s_calc, payback_d_calc, il_calc, receita_total, opex_total,
+                    lucro_total, margem_liquida_calc, tir_equity, vpl_equity,
+                    capital_proprio_valor, capital_terceiros_valor, dscr_calc,
+                    vantajosidade_vfm_pct, economia_vfm_valor, df, fluxos_dict
+                )
+                st.sidebar.download_button(
+                    "⬇️ Baixar PDF", pdf_buffer, "relatorio_executivo_evte.pdf",
+                    "application/pdf", use_container_width=True
+                )
+            except Exception as e:
+                st.sidebar.error(f"Erro ao gerar PDF: {e}")
+else:
+    st.sidebar.caption("⚠️ Adicione 'reportlab' e 'kaleido' ao requirements.txt para habilitar a exportação em PDF.")
+
 
 # ============================================================
 # CABECALHO
@@ -541,7 +694,6 @@ with col_score:
     </div>
     """, unsafe_allow_html=True)
 
-viavel = (vpl_calc >= 0) and (tir_calc >= tma_input)
 badge_class = "badge-ok" if viavel else "badge-warn"
 badge_texto = "✅ PROJETO VIÁVEL" if viavel else "⚠️ ATENÇÃO — REVISAR PREMISSAS"
 st.markdown(f"<span class='badge {badge_class}'>{badge_texto}</span>", unsafe_allow_html=True)
@@ -586,7 +738,7 @@ with tab1:
     fig1 = go.Figure()
     cores_barras = [COR_ERRO if v < 0 else COR_SUCESSO for v in df["fluxo_caixa_acumulado"]]
     fig1.add_trace(go.Bar(x=df["ano"], y=df["fluxo_caixa_acumulado"], marker_color=cores_barras, name="Fluxo acumulado"))
-    fig1.add_hline(y=0, line_color=RGBA_BRANCO_FRACO, line_width=1)
+    fig1.add_hline(y=0, line_color=RGBA_LINHA_REF, line_width=1)
     fig1.update_layout(**LAYOUT_BASE, xaxis_title="Ano", yaxis_title="R$", height=400, hovermode="x unified")
     st.plotly_chart(fig1, use_container_width=True)
 
@@ -636,7 +788,7 @@ with tab2:
         cor_dscr = COR_SUCESSO if dscr_calc >= 1.3 else (COR_ALERTA if dscr_calc >= 1.0 else COR_ERRO)
         col_d3.markdown(f"""
         <div style='padding-top:8px;'>
-            <span style='font-size:0.78rem; text-transform:uppercase; opacity:0.65; font-weight:600;'>DSCR</span><br>
+            <span style='font-size:0.78rem; text-transform:uppercase; opacity:0.7; font-weight:600; color:{COR_TEXTO_SEC};'>DSCR</span><br>
             <span style='font-size:1.55rem; font-weight:700; color:{cor_dscr}'>{dscr_calc:.2f}x</span>
         </div>
         """, unsafe_allow_html=True)
@@ -649,7 +801,7 @@ with tab2:
         elif dscr_calc >= 1.0:
             st.markdown("<div class='alert-box'>⚠️ DSCR apertado — próximo do limite mínimo aceito por instituições financeiras.</div>", unsafe_allow_html=True)
         else:
-            st.markdown("<div class='alert-box' style='border-color:#ff5c5c'>🔴 DSCR insuficiente — o fluxo de caixa pode não cobrir o serviço da dívida nas premissas atuais.</div>", unsafe_allow_html=True)
+            st.markdown(f"<div class='alert-box' style='border-color:{COR_ERRO}'>🔴 DSCR insuficiente — o fluxo de caixa pode não cobrir o serviço da dívida nas premissas atuais.</div>", unsafe_allow_html=True)
 
     st.markdown(
         "<div class='section-header'><span class='pill pill-publico'>Poder Público</span>"
@@ -698,9 +850,10 @@ with tab3:
             number={'suffix': "%", 'font': {'size': 38}},
             delta={'reference': tma_input * 100, 'increasing': {'color': COR_SUCESSO}, 'decreasing': {'color': COR_ERRO}},
             gauge={
-                'axis': {'range': [0, limite_gauge], 'tickcolor': "white"},
+                'axis': {'range': [0, limite_gauge], 'tickcolor': COR_TEXTO_SEC},
                 'bar': {'color': COR_PRIMARIA},
                 'bgcolor': COR_CARD,
+                'bordercolor': COR_BORDA,
                 'steps': [
                     {'range': [0, tma_input * 100], 'color': RGBA_ERRO_FRACO},
                     {'range': [tma_input * 100, limite_gauge], 'color': RGBA_SUCESSO_FRACO},
@@ -719,7 +872,7 @@ with tab3:
         fig3 = go.Figure()
         fig3.add_trace(go.Scatter(x=taxas * 100, y=vpls, mode="lines", line=dict(color=COR_ROXO, width=3),
                                    fill="tozeroy", fillcolor=RGBA_ROXO_FRACO))
-        fig3.add_hline(y=0, line_color=RGBA_BRANCO_FRACO, line_width=1)
+        fig3.add_hline(y=0, line_color=RGBA_LINHA_REF, line_width=1)
         fig3.add_vline(x=tma_input * 100, line_dash="dash", line_color=COR_ALERTA, annotation_text=f"TMA {tma_input*100:.2f}%")
         if not np.isnan(tir_calc):
             fig3.add_vline(x=tir_calc * 100, line_dash="dot", line_color=COR_SUCESSO, annotation_text=f"TIR {tir_calc*100:.2f}%")
@@ -774,7 +927,7 @@ with tab4:
         increasing={"marker": {"color": COR_SUCESSO}},
         decreasing={"marker": {"color": COR_ERRO}},
         totals={"marker": {"color": COR_PRIMARIA}},
-        connector={"line": {"color": "rgba(255,255,255,0.13)"}},
+        connector={"line": {"color": RGBA_LINHA_REF}},
     ))
     fig_wf.update_layout(**LAYOUT_BASE, height=460, xaxis_title="", yaxis_title="Valor Presente (R$)")
     st.plotly_chart(fig_wf, use_container_width=True)
@@ -786,7 +939,7 @@ with tab4:
         fig4 = go.Figure()
         fig4.add_trace(go.Scatter(x=df["ano"], y=acumulado_simples, mode="lines+markers",
                                    line=dict(color=COR_ROSA, width=3), fill="tozeroy", fillcolor=RGBA_ROSA_FRACO))
-        fig4.add_hline(y=0, line_color=RGBA_BRANCO_FRACO, line_width=1)
+        fig4.add_hline(y=0, line_color=RGBA_LINHA_REF, line_width=1)
         if not np.isnan(payback_s_calc):
             fig4.add_vline(x=payback_s_calc, line_dash="dash", line_color=COR_SUCESSO,
                            annotation_text=f"Payback: {payback_s_calc:.1f}a")
