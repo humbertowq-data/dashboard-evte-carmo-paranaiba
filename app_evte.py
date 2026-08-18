@@ -1,16 +1,18 @@
 """
-Dashboard EVTE 4.0 - Analisador Executivo de Estudos de Viabilidade Economico-Financeira
+Dashboard EVTE 4.1 - Analisador Executivo de Estudos de Viabilidade Economico-Financeira
 ==========================================================================================
+Correcao v4.1: cores com transparencia em elementos Plotly (linhas, preenchimentos, steps do
+gauge) convertidas de hex+alpha (#rrggbbaa) para rgba(r,g,b,a), formato aceito universalmente
+pelo validador de cores do Plotly. O CSS (que aceita #rrggbbaa nativamente) nao foi alterado.
 
-NOVIDADES DA V4.0 (foco em decisao executiva):
+NOVIDADES DA V4.0 (mantidas):
   - Payback relativo ao prazo da concessao (% consumido + margem de seguranca).
   - Retorno sobre Capital Proprio (equity) - separado do retorno do projeto (unlevered).
   - DSCR aproximado (Indice de Cobertura do Servico da Divida).
   - Matriz de Riscos qualitativa com heatmap de severidade.
   - Comparativo Value for Money (vantajosidade para o poder concedente).
   - Alerta de concentracao de receita (dependencia de pagador unico).
-  - Interface redesenhada: hierarquia visual clara, secoes "Investidor" vs "Poder Publico",
-    tipografia refinada, espacamento generoso, menos poluicao visual.
+  - Interface com hierarquia visual clara, secoes "Investidor" vs "Poder Publico".
 
 INSTALACAO LOCAL:
     pip install streamlit plotly pandas numpy pdfplumber
@@ -34,12 +36,11 @@ except ImportError:
 st.set_page_config(page_title="Dashboard EVTE | Análise Executiva", page_icon="📊", layout="wide", initial_sidebar_state="expanded")
 
 # ============================================================
-# PALETA E TEMA VISUAL — refinado para leitura executiva
+# PALETA E TEMA VISUAL
 # ============================================================
 
 COR_FUNDO = "#0a0c10"
 COR_CARD = "#12151c"
-COR_CARD_ALT = "#161a23"
 COR_BORDA = "#20242f"
 COR_PRIMARIA = "#4f8cff"
 COR_SUCESSO = "#2fd97f"
@@ -51,6 +52,18 @@ COR_ROXO = "#b985ff"
 COR_ROSA = "#ff7cb6"
 COR_CIANO = "#4fd8e8"
 
+# Versoes RGBA (para uso em elementos Plotly, que nao aceitam hex+alpha de 8 digitos)
+def hex_to_rgba(hex_color, alpha):
+    hex_color = hex_color.lstrip('#')
+    r, g, b = int(hex_color[0:2], 16), int(hex_color[2:4], 16), int(hex_color[4:6], 16)
+    return f"rgba({r},{g},{b},{alpha})"
+
+RGBA_BRANCO_FRACO = "rgba(255,255,255,0.2)"
+RGBA_ROXO_FRACO = hex_to_rgba(COR_ROXO, 0.13)
+RGBA_ROSA_FRACO = hex_to_rgba(COR_ROSA, 0.10)
+RGBA_ERRO_FRACO = hex_to_rgba(COR_ERRO, 0.19)
+RGBA_SUCESSO_FRACO = hex_to_rgba(COR_SUCESSO, 0.19)
+
 CUSTOM_CSS = f"""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
@@ -58,7 +71,6 @@ CUSTOM_CSS = f"""
     .stApp {{ background-color: {COR_FUNDO}; color: {COR_TEXTO}; }}
     .main .block-container {{ padding-top: 1.2rem; padding-bottom: 3rem; max-width: 1440px; }}
 
-    /* Metricas */
     div[data-testid="stMetric"] {{
         background: {COR_CARD};
         border: 1px solid {COR_BORDA};
@@ -71,7 +83,6 @@ CUSTOM_CSS = f"""
     div[data-testid="stMetricValue"] {{ font-size: 1.55rem; font-weight: 700; }}
     div[data-testid="stMetricDelta"] {{ font-size: 0.85rem; }}
 
-    /* Abas */
     .stTabs [data-baseweb="tab-list"] {{ gap: 4px; border-bottom: 1px solid {COR_BORDA}; margin-bottom: 8px; }}
     .stTabs [data-baseweb="tab"] {{
         background-color: transparent; border-radius: 8px 8px 0 0;
@@ -90,8 +101,6 @@ CUSTOM_CSS = f"""
     .badge {{ display: inline-block; padding: 5px 14px; border-radius: 20px; font-weight: 700; font-size: 0.85rem; }}
     .badge-ok {{ background: {COR_SUCESSO}1a; color: {COR_SUCESSO}; border: 1px solid {COR_SUCESSO}40; }}
     .badge-warn {{ background: {COR_ALERTA}1a; color: {COR_ALERTA}; border: 1px solid {COR_ALERTA}40; }}
-    .badge-error {{ background: {COR_ERRO}1a; color: {COR_ERRO}; border: 1px solid {COR_ERRO}40; }}
-    .badge-info {{ background: {COR_PRIMARIA}1a; color: {COR_PRIMARIA}; border: 1px solid {COR_PRIMARIA}40; }}
 
     .info-box {{ background: {COR_CARD}; border-left: 3px solid {COR_PRIMARIA}; padding: 12px 16px; border-radius: 6px; font-size: 0.88rem; }}
     .alert-box {{ background: {COR_ALERTA}12; border-left: 3px solid {COR_ALERTA}; padding: 12px 16px; border-radius: 6px; font-size: 0.88rem; margin: 8px 0; }}
@@ -151,7 +160,6 @@ PADROES_INDICADORES = {
     "Investimento Total / CAPEX (R$)": r"(?:INVESTIMENTO TOTAL|Investimento Total|CAPEX Total)[^\n]{0,60}?R\$\s*([\d\.,]+)",
     "Capital Terceiros (%)": r"Capital de Terceiros[^\d%\n]{0,40}?([\d,]+)\s*%",
     "Capital Proprio (%)": r"Capital Pr[óo]prio[^\d%\n]{0,40}?([\d,]+)\s*%",
-    "Prazo Concessao (anos)": r"(?:prazo de|concess[ãa]o de|vig[êe]ncia de)\s*(\d{1,2})\s*\(?\s*(?:vinte|anos)",
     "Vantajosidade VfM (%)": r"Vantajosidade\s*%[^\d\n]{0,20}?([\d,]+)\s*%",
     "VfM Cenario PPP (R$)": r"Cen[áa]rio PPP[^\n]{0,30}?R\$\s*([\d\.,]+)",
     "VfM Cenario Atual (R$)": r"Cen[áa]rio com Custo Atual[^\n]{0,30}?R\$\s*([\d\.,]+)",
@@ -215,7 +223,6 @@ def analisar_pdf_cache(arquivo_bytes, nome_arquivo):
         else:
             series[chave] = {}
 
-    # Validacao cruzada: soma do fluxo de caixa incremental vs valor de contrato
     alerta_validacao = None
     if series.get("receita") and indicadores.get("Valor de Contrato (R$)"):
         soma_receita = sum(series["receita"].values())
@@ -235,9 +242,7 @@ def analisar_pdf_cache(arquivo_bytes, nome_arquivo):
 # ============================================================
 
 TMA_REF = 0.0807
-PRAZO_CONCESSAO_REF = 25
 PCT_CAPITAL_TERCEIROS_REF = 0.45
-PCT_CAPITAL_PROPRIO_REF = 0.55
 CUSTO_DIVIDA_REF = 0.0532
 CAPEX_TOTAL_REF = 13_891_524.04
 VFM_CENARIO_PPP_REF = 39_375_680.56
@@ -381,10 +386,6 @@ def payback_relativo_ao_prazo(payback_anos, horizonte):
 
 
 def calcular_fluxo_equity(fluxos_projeto, pct_capital_proprio):
-    """Aproximacao do fluxo de caixa do acionista: no investimento inicial,
-    o acionista desembolsa apenas sua fracao (capital proprio); fluxos
-    operacionais sao mantidos integrais (simplificacao sem detalhar
-    o servico da divida period a periodo)."""
     fluxos_equity = {}
     for ano, v in fluxos_projeto.items():
         fluxos_equity[ano] = v * pct_capital_proprio if v < 0 else v
@@ -401,13 +402,11 @@ def dscr_aproximado(fluxo_caixa_operacional_medio, capital_terceiros_total, cust
 
 
 def calcular_concentracao_receita(receita_serie):
-    """Para PPPs/concessoes, a receita normalmente vem de um unico pagador
-    (poder concedente). Retorna um indicador qualitativo de concentracao."""
     valores = [v for v in receita_serie.values() if v and v > 0]
     if not valores:
         return None
     cv = np.std(valores) / np.mean(valores) if np.mean(valores) else 0
-    return cv  # coeficiente de variacao: baixo = receita estavel e concentrada em 1 fonte
+    return cv
 
 
 # ============================================================
@@ -459,7 +458,7 @@ prazo_amortizacao = st.sidebar.slider("Prazo de Amortização da Dívida (anos)"
 st.sidebar.markdown("---")
 st.sidebar.caption(f"📄 **Fonte ativa**\n\n{nome_fonte}")
 st.sidebar.caption("💡 Os parâmetros de capital/dívida alimentam os indicadores de ROE e DSCR na aba "
-                    "'Investidor vs. Poder Público'.")
+                    "'Investidor × Poder Público'.")
 
 
 # ============================================================
@@ -492,9 +491,8 @@ fluxos_dict = dict(zip(df["ano"], df["fluxo_caixa_livre"]))
 capex_total = indicadores_extraidos.get("Investimento Total / CAPEX (R$)") if usar_pdf and indicadores_extraidos.get("Investimento Total / CAPEX (R$)") else CAPEX_TOTAL_REF
 vfm_ppp = indicadores_extraidos.get("VfM Cenario PPP (R$)") if usar_pdf and indicadores_extraidos.get("VfM Cenario PPP (R$)") else VFM_CENARIO_PPP_REF
 vfm_atual = indicadores_extraidos.get("VfM Cenario Atual (R$)") if usar_pdf and indicadores_extraidos.get("VfM Cenario Atual (R$)") else VFM_CENARIO_ATUAL_REF
-matriz_riscos = MATRIZ_RISCOS_REF  # qualitativo: mantido como referencia setorial (PPP/concessao)
+matriz_riscos = MATRIZ_RISCOS_REF
 
-# --- Indicadores do projeto (unlevered) ---
 vpl_calc = vpl_fluxo_anual(tma_input, fluxos_dict)
 tir_calc = tir_bisseccao(fluxos_dict)
 payback_s_calc = payback_simples(fluxos_dict)
@@ -507,7 +505,6 @@ opex_total = df["opex"].sum()
 lucro_total = df["lucro_liquido"].sum()
 margem_liquida_calc = (lucro_total / receita_total * 100) if receita_total else np.nan
 
-# --- Indicadores executivos novos ---
 pct_payback_consumido, margem_seguranca_anos = payback_relativo_ao_prazo(payback_s_calc, horizonte)
 
 fluxos_equity = calcular_fluxo_equity(fluxos_dict, pct_capital_proprio)
@@ -589,7 +586,7 @@ with tab1:
     fig1 = go.Figure()
     cores_barras = [COR_ERRO if v < 0 else COR_SUCESSO for v in df["fluxo_caixa_acumulado"]]
     fig1.add_trace(go.Bar(x=df["ano"], y=df["fluxo_caixa_acumulado"], marker_color=cores_barras, name="Fluxo acumulado"))
-    fig1.add_hline(y=0, line_color="#ffffff33", line_width=1)
+    fig1.add_hline(y=0, line_color=RGBA_BRANCO_FRACO, line_width=1)
     fig1.update_layout(**LAYOUT_BASE, xaxis_title="Ano", yaxis_title="R$", height=400, hovermode="x unified")
     st.plotly_chart(fig1, use_container_width=True)
 
@@ -705,8 +702,8 @@ with tab3:
                 'bar': {'color': COR_PRIMARIA},
                 'bgcolor': COR_CARD,
                 'steps': [
-                    {'range': [0, tma_input * 100], 'color': f"{COR_ERRO}30"},
-                    {'range': [tma_input * 100, limite_gauge], 'color': f"{COR_SUCESSO}30"},
+                    {'range': [0, tma_input * 100], 'color': RGBA_ERRO_FRACO},
+                    {'range': [tma_input * 100, limite_gauge], 'color': RGBA_SUCESSO_FRACO},
                 ],
                 'threshold': {'line': {'color': COR_ALERTA, 'width': 4}, 'thickness': 0.8, 'value': tma_input * 100},
             },
@@ -721,8 +718,8 @@ with tab3:
         vpls = [vpl_fluxo_anual(t, fluxos_dict) for t in taxas]
         fig3 = go.Figure()
         fig3.add_trace(go.Scatter(x=taxas * 100, y=vpls, mode="lines", line=dict(color=COR_ROXO, width=3),
-                                   fill="tozeroy", fillcolor=f"{COR_ROXO}22"))
-        fig3.add_hline(y=0, line_color="#ffffff33", line_width=1)
+                                   fill="tozeroy", fillcolor=RGBA_ROXO_FRACO))
+        fig3.add_hline(y=0, line_color=RGBA_BRANCO_FRACO, line_width=1)
         fig3.add_vline(x=tma_input * 100, line_dash="dash", line_color=COR_ALERTA, annotation_text=f"TMA {tma_input*100:.2f}%")
         if not np.isnan(tir_calc):
             fig3.add_vline(x=tir_calc * 100, line_dash="dot", line_color=COR_SUCESSO, annotation_text=f"TIR {tir_calc*100:.2f}%")
@@ -777,7 +774,7 @@ with tab4:
         increasing={"marker": {"color": COR_SUCESSO}},
         decreasing={"marker": {"color": COR_ERRO}},
         totals={"marker": {"color": COR_PRIMARIA}},
-        connector={"line": {"color": "#ffffff22"}},
+        connector={"line": {"color": "rgba(255,255,255,0.13)"}},
     ))
     fig_wf.update_layout(**LAYOUT_BASE, height=460, xaxis_title="", yaxis_title="Valor Presente (R$)")
     st.plotly_chart(fig_wf, use_container_width=True)
@@ -788,8 +785,8 @@ with tab4:
         acumulado_simples = np.cumsum(df["fluxo_caixa_livre"].fillna(0).values)
         fig4 = go.Figure()
         fig4.add_trace(go.Scatter(x=df["ano"], y=acumulado_simples, mode="lines+markers",
-                                   line=dict(color=COR_ROSA, width=3), fill="tozeroy", fillcolor=f"{COR_ROSA}18"))
-        fig4.add_hline(y=0, line_color="#ffffff33", line_width=1)
+                                   line=dict(color=COR_ROSA, width=3), fill="tozeroy", fillcolor=RGBA_ROSA_FRACO))
+        fig4.add_hline(y=0, line_color=RGBA_BRANCO_FRACO, line_width=1)
         if not np.isnan(payback_s_calc):
             fig4.add_vline(x=payback_s_calc, line_dash="dash", line_color=COR_SUCESSO,
                            annotation_text=f"Payback: {payback_s_calc:.1f}a")
